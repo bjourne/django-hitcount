@@ -153,7 +153,7 @@ class GetHitCountJavascript(template.Node):
         obj, created = HitCount.objects.get_or_create(content_type=ctype, 
                         object_pk=object_pk)
 
-        js =    "$.post( '" + reverse('hitcount_update_ajax') + "',"   + \
+        js =    "jQuery.post( '" + reverse('hitcount_update_ajax') + "',"   + \
                 "\n\t{ hitcount_pk : '" + str(obj.pk) + "' },\n"         + \
                 "\tfunction(data, status) {\n"                         + \
                 "\t\tif (data.status == 'error') {\n"                  + \
@@ -172,7 +172,7 @@ def get_hit_count_javascript(parser, token):
 
     <script src="/media/js/jquery-latest.js" type="text/javascript"></script>
     <script type="text/javascript"><!--
-    $(document).ready(function() {
+    jQuery(document).ready(function() {
         {% get_hit_count_javascript for [object] %}
     });
     --></script> 
