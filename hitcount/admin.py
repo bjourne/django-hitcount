@@ -3,18 +3,8 @@ from django.contrib import admin
 from hitcount.models import Hit, HitCount, BlacklistIP, BlacklistUserAgent
 from hitcount import actions
 
-def created_format(obj):
-    '''
-    Format the created time for the admin. PS: I am not happy with this.
-    '''
-    return "%s" % obj.created.strftime("%m/%d/%y<br />%H:%M:%S")
-created_format.short_description = "Date (UTC)"
-created_format.allow_tags = True
-created_format.admin_order_field = 'created'
-
-
 class HitAdmin(admin.ModelAdmin):
-    list_display = (created_format,'user','ip','user_agent','hitcount')
+    list_display = ('created','user','ip','user_agent','hitcount')
     search_fields = ('ip','user_agent')
     date_hierarchy = 'created'
     actions = [ actions.blacklist_ips,
@@ -41,7 +31,7 @@ class HitAdmin(admin.ModelAdmin):
 #   b) have the `delete` command actually alter the HitCount
 #   c) remove the ability to 'add new hit'
 #
-#class HitInline(admin.TabularInline):
+#class HitInline(admin.StackedInline):
 #    model = Hit
 #    fk_name = 'hitcount'
 #    extra = 0
@@ -53,14 +43,7 @@ class HitCountAdmin(admin.ModelAdmin):
     # TODO - when above is ready
     #inlines = [ HitInline, ]
 
-class BlacklistIPAdmin(admin.ModelAdmin):
-    pass
-
-
-class BlacklistUserAgentAdmin(admin.ModelAdmin):
-    pass
- 
 admin.site.register(Hit, HitAdmin)
-admin.site.register(HitCount, HitCountAdmin) 
-admin.site.register(BlacklistIP, BlacklistIPAdmin)
-admin.site.register(BlacklistUserAgent, BlacklistUserAgentAdmin)
+admin.site.register(HitCount, HitCountAdmin)
+admin.site.register(BlacklistIP)
+admin.site.register(BlacklistUserAgent)

@@ -1,34 +1,12 @@
 import datetime
 
-from django.db import models
 from django.conf import settings
-from django.db.models import F
-
-from django.contrib.contenttypes.models import ContentType
 from django.contrib.auth.models import User
+from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes import generic
-
-from django.dispatch import Signal
-
-
-# SIGNALS #
-
-delete_hit_count = Signal(providing_args=['save_hitcount',])
-
-def delete_hit_count_callback(sender, instance, 
-        save_hitcount=False, **kwargs):
-    '''
-    Custom callback for the Hit.delete() method.
-
-    Hit.delete(): removes the hit from the associated HitCount object.
-    Hit.delete(save_hitcount=True): preserves the hit for the associated
-        HitCount object.
-    '''
-    if not save_hitcount:
-        instance.hitcount.hits = F('hits') - 1
-        instance.hitcount.save()
-
-delete_hit_count.connect(delete_hit_count_callback)
+from django.core.exceptions import ObjectDoesNotExist
+from django.db import models
+from django.db.models import F
 
 
 # EXCEPTIONS #
@@ -37,6 +15,7 @@ class DuplicateContentObject(Exception):
     'If content_object already exists for this model'
     pass
 
+
 # MANAGERS #
 
 class HitManager(models.Manager):
@@ -44,12 +23,12 @@ class HitManager(models.Manager):
     def filter_active(self, *args, **kwargs):
         '''
         Return only the 'active' hits.
-        
+
         How you count a hit/view will depend on personal choice: Should the
         same user/visitor *ever* be counted twice?  After a week, or a month,
         or a year, should their view be counted again?
 
-        The defaulf is to consider a visitor's hit still 'active' if they 
+        The defaulf is to consider a visitor's hit still 'active' if they
         return within a the last seven days..  After that the hit
         will be counted again.  So if one person visits once a week for a year,
         they will add 52 hits to a given object.
@@ -58,14 +37,46 @@ class HitManager(models.Manager):
 
         HITCOUNT_KEEP_HIT_ACTIVE  = {'days' : 30, 'minutes' : 30}
 
-        Accepts days, seconds, microseconds, milliseconds, minutes, 
+        Accepts days, seconds, microseconds, milliseconds, minutes,
         hours, and weeks.  It's creating a datetime.timedelta object.
         '''
         grace = getattr(settings, 'HITCOUNT_KEEP_HIT_ACTIVE', {'days':7})
-        period = datetime.datetime.utcnow() - datetime.timedelta(**grace)
+        period = datetime.datetime.now() - datetime.timedelta(**grace)
         queryset = self.get_query_set()
         queryset = queryset.filter(created__gte=period)
         return queryset.filter(*args, **kwargs)
+
+class HitCountManger(models.Manager):
+
+    def get_for_queryset(self, queryset, cutoff_datetime=None):
+        '''
+        New Feature: still testing!
+
+        Return the passed queryset with a `hits` value attached.  Optionally,
+        can specify a cutoff date for the hit counts (eg, seven days ago).
+
+        Thoughts:
+
+        - Am returning the list unsorted, but could maybe add an option for in
+          place sorting (descending or ascending).
+
+        - This is an expensive query, should enable caching (maybe via an
+          option like `cache=5 minutes` or something.
+        '''
+        ctype = ContentType.objects.get_for_model(queryset.model)
+        qs = self.get_query_set().filter(content_type__exact=ctype.pk)
+
+        for obj in queryset:
+            try:
+                hitcount = qs.get(content_type=ctype.pk, object_pk=obj.pk)
+                if cutoff_datetime:
+                    obj.hits = hitcount.hits_in_last(cutoff_datetime)
+                else:
+                    obj.hits = hitcount.hits
+            except ObjectDoesNotExist:
+                obj.hits = 0
+
+        return queryset
 
 
 # MODELS #
@@ -76,16 +87,17 @@ class HitCount(models.Model):
 
     '''
     hits            = models.PositiveIntegerField(default=0)
-    modified        = models.DateTimeField(default=datetime.datetime.utcnow)
+    modified        = models.DateTimeField(default=datetime.datetime.now)
     content_type    = models.ForeignKey(ContentType,
                         verbose_name="content cype",
                         related_name="content_type_set_for_%(class)s",)
     object_pk       = models.TextField('object ID')
     content_object  = generic.GenericForeignKey('content_type', 'object_pk')
 
+    objects = HitCountManger()
+
     class Meta:
         ordering = ( '-hits', )
-        #unique_together = (("content_type", "object_pk"),)
         get_latest_by = "modified"
         db_table = "hitcount_hit_count"
         verbose_name = "Hit Count"
@@ -95,7 +107,7 @@ class HitCount(models.Model):
         return u'%s' % self.content_object
 
     def save(self, *args, **kwargs):
-        self.modified = datetime.datetime.utcnow()
+        self.modified = datetime.datetime.now()
 
         if not self.pk and self.object_pk and self.content_type:
             # Because we are using a models.TextField() for `object_pk` to
@@ -106,7 +118,7 @@ class HitCount(models.Model):
             # This is just a simple hack - if there is no `self.pk`
             # set, it checks the database once to see if the `content_type`
             # and `object_pk` exist together (uniqueness).  Obviously, this
-            # is not fool proof - if someone sets their own `id` or `pk` 
+            # is not fool proof - if someone sets their own `id` or `pk`
             # when initializing the HitCount object, we could get a duplicate.
             if HitCount.objects.filter(
                     object_pk=self.object_pk).filter(
@@ -116,7 +128,7 @@ class HitCount(models.Model):
 
         super(HitCount, self).save(*args, **kwargs)
 
-    def hits_in_last(self, **kwargs):
+    def hits_in_last(self, cutoff_datetime=None, **kwargs):
         '''
         Returns hit count for an object during a given time period.
 
@@ -124,14 +136,20 @@ class HitCount(models.Model):
         If you are purging your database after 45 days, for example, that means
         that asking for hits in the last 60 days will return an incorrect
         number as that the longest period it can search will be 45 days.
-        
+
         For example: hits_in_last(days=7).
 
-        Accepts days, seconds, microseconds, milliseconds, minutes, 
-        hours, and weeks.  It's creating a datetime.timedelta object.
+        Accepts days, seconds, microseconds, milliseconds, minutes,
+        hours, and weeks as **kwargs - creating a datetime.timedelta object.
+
+        Alternately, you can pass it a datetime object as a cutoff.
         '''
+
+        if cutoff_datetime: # provide your own datetime object
+            return self.hit_set.filter(created__gte=cutoff_datetime).count()
+
         assert kwargs, "Must provide at least one timedelta arg (eg, days=1)"
-        period = datetime.datetime.utcnow() - datetime.timedelta(**kwargs)
+        period = datetime.datetime.now() - datetime.timedelta(**kwargs)
         return self.hit_set.filter(created__gte=period).count()
 
     def get_content_object_url(self):
@@ -141,14 +159,13 @@ class HitCount(models.Model):
         '''
         pass
 
-
 class Hit(models.Model):
     '''
     Model captures a single Hit by a visitor.
 
     None of the fields are editable because they are all dynamically created.
     Browsing the Hit list in the Admin will allow one to blacklist both
-    IP addresses and User Agents. Blacklisting simply causes those hits 
+    IP addresses and User Agents. Blacklisting simply causes those hits
     to not be counted or recorded any more.
 
     Depending on how long you set the HITCOUNT_KEEP_HIT_ACTIVE , and how long
@@ -165,22 +182,22 @@ class Hit(models.Model):
     hitcount        = models.ForeignKey(HitCount, editable=False)
 
     class Meta:
-        ordering = ( '-created', )    
+        ordering = ( '-created', )
         get_latest_by = 'created'
 
     def __unicode__(self):
-        return u'Hit: %s' % self.pk 
+        return u'Hit: %s' % self.pk
 
     def save(self, *args, **kwargs):
         '''
-        The first time the object is created and saved, we increment 
+        The first time the object is created and saved, we increment
         the associated HitCount object by one.  The opposite applies
         if the Hit is deleted.
         '''
         if not self.created:
             self.hitcount.hits = F('hits') + 1
             self.hitcount.save()
-            self.created = datetime.datetime.utcnow()
+            self.created = datetime.datetime.now()
 
         super(Hit, self).save(*args, **kwargs)
 
@@ -188,22 +205,29 @@ class Hit(models.Model):
 
     def delete(self, save_hitcount=False):
         '''
-        If a Hit is deleted and save_hitcount=True, it will preserve the 
-        HitCount object's total.  However, under normal circumstances, a 
+        If a Hit is deleted and save_hitcount=True, it will preserve the
+        HitCount object's total.  However, under normal circumstances, a
         delete() will trigger a subtraction from the HitCount object's total.
 
-        NOTE: This doesn't work at all during a queryset.delete().
+        NOTE: This doesn't work during a queryset.delete() (because
+        queryset.delete() skips this function).
         '''
-        delete_hit_count.send(sender=self, instance=self, 
-                save_hitcount=save_hitcount)
+        if not save_hitcount:
+            self.hitcount.hits = F('hits') - 1
+            self.hitcount.save()
+
         super(Hit, self).delete()
 
-
-
 class BlacklistIP(models.Model):
+    '''
+    Model that holds all the blacklisted IPs.
+
+    TODO - add a method that could import a known list of nefarious IPs.
+
+    '''
     ip = models.CharField(max_length=40, unique=True)
 
-    class Meta: 
+    class Meta:
         db_table = "hitcount_blacklist_ip"
         verbose_name = "Blacklisted IP"
         verbose_name_plural = "Blacklisted IPs"
@@ -213,9 +237,13 @@ class BlacklistIP(models.Model):
 
 
 class BlacklistUserAgent(models.Model):
+    '''
+    Model that holds all the blacklisted User-Agents.
+
+    '''
     user_agent = models.CharField(max_length=255, unique=True)
 
-    class Meta: 
+    class Meta:
         db_table = "hitcount_blacklist_user_agent"
         verbose_name = "Blacklisted User Agent"
         verbose_name_plural = "Blacklisted User Agents"
