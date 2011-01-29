@@ -95,10 +95,13 @@ class HitCountManger(models.Manager):
         Returns True if the request was considered a Hit; returns
         False if not.
         '''
+        meta = request.META
+        
         user = request.user
         session_key = request.session.session_key
         ip = get_ip(request)
-        user_agent = request.META.get('HTTP_USER_AGENT', '')[:255]
+        user_agent = meta.get('HTTP_USER_AGENT', '')[:255]
+        referer = meta.get('HTTP_REFERER', '')[:511]
         hits_per_ip_limit = getattr(settings, 'HITCOUNT_HITS_PER_IP_LIMIT', 0)
         exclude_user_group = getattr(settings,
                                      'HITCOUNT_EXCLUDE_USER_GROUP', None)
@@ -125,7 +128,8 @@ class HitCountManger(models.Manager):
         hit = Hit(session = session_key,
                   hitcount = hitcount,
                   ip = ip,
-                  user_agent = user_agent)
+                  user_agent = user_agent,
+                  referer = referer)
 
         # first, use a user's authentication to see if they made an earlier hit
         if user.is_authenticated():
@@ -242,6 +246,7 @@ class Hit(models.Model):
     session         = models.CharField(max_length=40, editable=False)
     user_agent      = models.CharField(max_length=255, editable=False)
     user            = models.ForeignKey(User,null=True, editable=False)
+    referer         = models.CharField(max_length=511, editable=False) 
     hitcount        = models.ForeignKey(HitCount, editable=False)
 
     class Meta:
