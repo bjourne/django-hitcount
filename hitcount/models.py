@@ -7,6 +7,7 @@ from django.contrib.contenttypes import generic
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import models
 from django.db.models import F
+from hitcount.utils import get_ip
 
 
 # EXCEPTIONS #
@@ -78,6 +79,68 @@ class HitCountManger(models.Manager):
 
         return queryset
 
+    def update_object_count(self, content_object, request):
+        '''
+        Increments the hit count for the content_object with the
+        request. Returns True if the request was considered a Hit; returns
+        False if not.
+        '''
+        ctype = ContentType.objects.get_for_model(content_object)
+        pk = content_object.pk
+        hitcount, c = self.get_or_create(content_type = ctype, object_pk = pk)
+        return self.update_hit_count(hitcount, request)
+
+    def update_hit_count(self, hitcount, request):
+        '''
+        Returns True if the request was considered a Hit; returns
+        False if not.
+        '''
+        user = request.user
+        session_key = request.session.session_key
+        ip = get_ip(request)
+        user_agent = request.META.get('HTTP_USER_AGENT', '')[:255]
+        hits_per_ip_limit = getattr(settings, 'HITCOUNT_HITS_PER_IP_LIMIT', 0)
+        exclude_user_group = getattr(settings,
+                                     'HITCOUNT_EXCLUDE_USER_GROUP', None)
+
+        # first, check our request against the blacklists before continuing
+        if BlacklistIP.objects.filter(ip__exact = ip) or \
+                BlacklistUserAgent.objects.filter(user_agent__exact = user_agent):
+            return False
+
+        # second, see if we are excluding a specific user group or not
+        if exclude_user_group and user.is_authenticated():
+            if user.groups.filter(name__in = exclude_user_group):
+                return False
+
+        # start with a fresh active query set (HITCOUNT_KEEP_HIT_ACTIVE )
+        qs = Hit.objects.filter_active()
+
+        # check limit on hits from a unique ip address (HITCOUNT_HITS_PER_IP_LIMIT)
+        if hits_per_ip_limit:
+            if qs.filter(ip = ip).count() > hits_per_ip_limit:
+                return False
+
+        # create a generic Hit object with request data
+        hit = Hit(session = session_key,
+                  hitcount = hitcount,
+                  ip = ip,
+                  user_agent = user_agent)
+
+        # first, use a user's authentication to see if they made an earlier hit
+        if user.is_authenticated():
+            if not qs.filter(user = user, hitcount = hitcount):
+                hit.user = user #associate this hit with a user
+                hit.save()
+                return True
+        else:
+            # if not authenticated, see if we have a repeat session
+            if not qs.filter(session = session_key, hitcount = hitcount):
+                hit.save()
+                # forces a save on this anonymous users session
+                request.session.modified = True
+                return True
+        return False
 
 # MODELS #
 
