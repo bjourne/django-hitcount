@@ -79,7 +79,8 @@ class HitCountManger(models.Manager):
 
         return queryset
 
-    def update_object_count(self, content_object, request):
+    def update_object_count(self, content_object, request,
+                            user_key = 'default'):
         '''
         Increments the hit count for the content_object with the
         request. Returns True if the request was considered a Hit; returns
@@ -88,9 +89,10 @@ class HitCountManger(models.Manager):
         ctype = ContentType.objects.get_for_model(content_object)
         pk = content_object.pk
         hitcount, c = self.get_or_create(content_type = ctype, object_pk = pk)
-        return self.update_hit_count(hitcount, request)
+        return self.update_hit_count(hitcount, request, user_key)
 
-    def update_hit_count(self, hitcount, request):
+    def update_hit_count(self, hitcount, request,
+                         user_key = 'default'):
         '''
         Returns True if the request was considered a Hit; returns
         False if not.
@@ -129,7 +131,8 @@ class HitCountManger(models.Manager):
                   hitcount = hitcount,
                   ip = ip,
                   user_agent = user_agent,
-                  referer = referer)
+                  referer = referer,
+                  user_key = user_key)
 
         # first, use a user's authentication to see if they made an earlier hit
         if user.is_authenticated():
@@ -246,7 +249,13 @@ class Hit(models.Model):
     session         = models.CharField(max_length=40, editable=False)
     user_agent      = models.CharField(max_length=255, editable=False)
     user            = models.ForeignKey(User,null=True, editable=False)
-    referer         = models.CharField(max_length=511, editable=False) 
+    referer         = models.CharField(max_length=511, editable=False)
+    user_key        = models.SlugField(
+        max_length=50,
+        editable=False,
+        help_text = ('Arbitrary text field that can be used to identify '
+                     'the source of the hit in addition to the referer '
+                     'field.'))
     hitcount        = models.ForeignKey(HitCount, editable=False)
 
     class Meta:

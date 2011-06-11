@@ -4,7 +4,13 @@ from hitcount.models import Hit, HitCount, BlacklistIP, BlacklistUserAgent
 from hitcount import actions
 
 class HitAdmin(admin.ModelAdmin):
-    list_display = ('created','user','ip','user_agent','referer','hitcount')
+    list_display = ['created',
+                    'user',
+                    'ip',
+                    'user_agent',
+                    'referer',
+                    'user_key',
+                    'hitcount']
     search_fields = ('ip','user_agent')
     date_hierarchy = 'created'
     actions = [ actions.blacklist_ips,
